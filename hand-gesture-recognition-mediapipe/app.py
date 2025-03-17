@@ -11,10 +11,45 @@ import cv2 as cv
 import numpy as np
 import mediapipe as mp
 
+import speech_recognition as sr
+
 from utils import CvFpsCalc
 from model import KeyPointClassifier
 from model import PointHistoryClassifier
 
+from flask import Flask
+
+global text
+text = ""
+
+application = Flask(__name__)
+
+@application.route('/')
+def home():
+    r = sr.Recognizer()
+    mic = sr.Microphone()
+    with mic as source:
+        r.adjust_for_ambient_noise(source)
+    stop_listening = r.listen_in_background(mic, callback)
+    main_track()
+    stop_listening(wait_for_stop = False)
+
+def callback(r, audio):
+    try:
+        input = r.recognize_google(audio)
+        if any(word in input for word in ["stop", "exit", "quit"]):
+            print("Exiting...")
+            exit()
+        elif any(word in input for word in ["shadow", "fire", "lightning", "close"]):
+            global text
+            text = input
+            print("Text: ", text)
+    except sr.UnknownValueError:
+        print("Google Speech Recognition could not understand audio")
+    except sr.RequestError as e:
+        print(
+            "Could not request results from Google Speech Recognition service; {0}"
+            .format(e))
 
 def get_args():
     parser = argparse.ArgumentParser()
@@ -37,8 +72,7 @@ def get_args():
 
     return args
 
-
-def main():
+def main_track():
     # Argument parsing #################################################################
     args = get_args()
 
@@ -96,30 +130,10 @@ def main():
     # Finger gesture history ################################################
     finger_gesture_history = deque(maxlen=history_length)
 
-    #  ########################################################################
+    #  ########################################################################s
     mode = 0
-    
-    PREVIEW = 0       # Preview mode
-    BLUR = 1          # Blur mode
-    FEATURES = 2      # Features mode
-    CANNY = 3         # Canny mode
-    GRAYSCALE = 4     # Grayscale mode
-    LAPLACIAN = 5     # Laplacian edge detection mode
-    THRESHOLD = 6     # Threshold mode
-    BILATERAL = 7     # Bilateral filtering mode
-
-    mode_names = {
-    PREVIEW: "Preview",
-    BLUR: "Blur",
-    FEATURES: "Features",
-    CANNY: "Canny",
-    GRAYSCALE: "Grayscale",
-    LAPLACIAN: "Laplacian",
-    THRESHOLD: "Threshold",
-    BILATERAL: "Bilateral"
-    }
-
     while True:
+        # FPS Measurement ####################################################
         fps = cvFpsCalc.get()
 
         # Process Key (ESC: end) #################################################
@@ -141,34 +155,12 @@ def main():
         image.flags.writeable = False
         results = hands.process(image)
         image.flags.writeable = True
-        image_filter = PREVIEW
-
-        if image_filter == PREVIEW:
-            result = image
-
-        elif image_filter == BLUR:
-            result = cv.GaussianBlur(image, (21, 21), 0)
-
-        elif image_filter == CANNY:
-            result = cv.Canny(image, 30, 200)
-
-        elif image_filter == GRAYSCALE:
-            result = cv.cvtColor(image, cv.COLOR_BGR2GRAY)
-
-        elif image_filter == LAPLACIAN:
-            result = cv.Laplacian(image, cv.CV_64F)
-
-        elif image_filter == THRESHOLD:
-            gray = cv.cvtColor(image, cv.COLOR_BGR2GRAY)
-            _, result = cv.threshold(gray, 127, 255, cv.THRESH_BINARY)
-
-        elif image_filter == BILATERAL:
-            result = cv.bilateralFilter(image, 9, 75, 75)
+        
 
         #  ####################################################################
         if results.multi_hand_landmarks is not None:
             for hand_landmarks, handedness in zip(results.multi_hand_landmarks,
-                                                  results.multi_handedness):
+                                                results.multi_handedness):
                 # Bounding box calculation
                 brect = calc_bounding_rect(debug_image, hand_landmarks)
                 # Landmark calculation
@@ -213,27 +205,35 @@ def main():
                     keypoint_classifier_labels[hand_sign_id],
                     point_history_classifier_labels[most_common_fg_id[0][0]],
                 )
-
-                # Gesture Logic 
-                match keypoint_classifier_labels[hand_sign_id]:
-                    case "Shadow Clone":
-                        print('Detected 1')
-                        image_filter = LAPLACIAN              
-                    case "Fire":
-                        print("Detected")
-                    case "Lightning":
-                        print("Detected")
-                    case "Close":
-                        print("Breaking")
-                        image_filter = PREVIEW
+            
+            # Gesture Logic 
+            match keypoint_classifier_labels[hand_sign_id]:
+                case "Shadow Clone":
+                    if text =="shadow":
+                        result = cv.Canny(image, 30, 200)       
+                    else:
+                        result = debug_image    
+                case "Fire":
+                    if text =="fire":
+                        result = cv.Laplacian(debug_image, cv.CV_64F)   
+                    else:
+                        result = debug_image
+                case "Lightning":
+                    if text =="lightning":
+                        gray = cv.cvtColor(image, cv.COLOR_BGR2GRAY)
+                        _, result = cv.threshold(gray, 127, 255, cv.THRESH_BINARY)
+                    else:
+                        result = debug_image
+                case "Close":
+                    result = cv.bilateralFilter(image, 9, 75, 75)
+                case _ :
+                    result = debug_image
+            cv.imshow('Hand Gesture Recognition', result)
         else:
             point_history.append([0, 0])
 
         debug_image = draw_point_history(debug_image, point_history)
         debug_image = draw_info(debug_image, fps, mode, number)
-
-        # Screen reflection #############################################################
-        cv.imshow('Hand Gesture Recognition', result)
 
     cap.release()
     cv.destroyAllWindows()
@@ -598,4 +598,4 @@ def draw_info(image, fps, mode, number):
 
 
 if __name__ == '__main__':
-    main()
+    application.run(debug=True)
